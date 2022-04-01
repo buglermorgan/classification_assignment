@@ -1,0 +1,521 @@
+---
+title: "Telecom Contract Churn Modelling"
+author: "Z0177373"
+date: ""
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+downloading and importing the required packages 
+```{r}
+install.packages("tidyr", repos = "https://cran.r-project.org/")
+install.packages("dplyr", repos = "https://cran.r-project.org/")
+install.packages("Boruta", repos = "https://cran.r-project.org/")
+install.packages("mltools", repos = "https://cran.r-project.org/")
+install.packages("data.table", repos = "https://cran.r-project.org/")
+install.packages("tidyverse", repos = "https://cran.r-project.org/")
+install.packages("mlr3", repos = "https://cran.r-project.org/")
+install.packages("mlr3verse", repos = "https://cran.r-project.org/")
+install.packages("ggplot2", repos = "https://cran.r-project.org/")
+install.packages("tree", repos = "https://cran.r-project.org/")
+install.packages("ISLR", repos = "https://cran.r-project.org/")
+install.packages("imputeTS", repos = "https://cran.r-project.org/")
+install.packages("GGally", repos = "https://cran.r-project.org/")
+install.packages("na.tools", repos = "https://cran.r-project.org/")
+install.packages("Deducer", repos = "https://cran.r-project.org/")
+install.packages("boot", repos = "https://cran.r-project.org/")
+install.packages("caret", repos = "https://cran.r-project.org/")
+
+library("Boruta")
+library("mltools")
+library("Deducer")
+library("tidyr")
+library("dplyr")
+library("data.table")
+library("tidyverse")
+library("mlr3verse")
+library("boot")
+library("caret")
+library("mlr3")
+library("tree")
+library("ISLR")
+library("imputeTS")
+library("GGally")
+library("na.tools")
+
+
+set.seed(2022)
+```
+
+Importing the raw data file and producing a coppy which can be modified.
+
+```{r cars}
+phone_data <- read.csv("telecom.csv")
+phone_data.working_copy <- phone_data
+#print(phone_data.working_copy$Churn)
+```
+
+Hot encoding all of the data columns so they are in a format which works with the machine learning commands and replacing all of the NaNs with a zero to prevent issues whilst working with the different models.  
+
+```{r}
+phone_data.working_copy$gender <- as.numeric(as.factor(phone_data.working_copy$gender))
+phone_data.working_copy$Partner <- as.numeric(as.factor(phone_data.working_copy$Partner))
+phone_data.working_copy$PhoneService <- as.numeric(as.factor(phone_data.working_copy$PhoneService))
+phone_data.working_copy$MultipleLines <- as.numeric(as.factor(phone_data.working_copy$MultipleLines))
+phone_data.working_copy$InternetService <- as.numeric(as.factor(phone_data.working_copy$InternetService))
+phone_data.working_copy$OnlineSecurity <- as.numeric(as.factor(phone_data.working_copy$OnlineSecurity))
+phone_data.working_copy$OnlineBackup <- as.numeric(as.factor(phone_data.working_copy$OnlineBackup))
+phone_data.working_copy$DeviceProtection <- as.numeric(as.factor(phone_data.working_copy$DeviceProtection))
+phone_data.working_copy$TechSupport <- as.numeric(as.factor(phone_data.working_copy$TechSupport))
+phone_data.working_copy$StreamingTV <- as.numeric(as.factor(phone_data.working_copy$StreamingTV))
+phone_data.working_copy$StreamingMovies <- as.numeric(as.factor(phone_data.working_copy$StreamingMovies))
+phone_data.working_copy$Contract <- as.numeric(as.factor(phone_data.working_copy$Contract))
+phone_data.working_copy$PaperlessBilling <- as.numeric(as.factor(phone_data.working_copy$PaperlessBilling))
+phone_data.working_copy$PaymentMethod <- as.numeric(as.factor(phone_data.working_copy$PaymentMethod))
+phone_data.working_copy$tenure <- as.numeric(as.factor(phone_data.working_copy$tenure))
+phone_data.working_copy$Dependents <- as.numeric(as.factor(phone_data.working_copy$Dependents))
+phone_data.working_copy$MonthlyCharges <- as.numeric(as.factor(phone_data.working_copy$MonthlyCharges))
+phone_data.working_copy$TotalCharges <- as.numeric(as.factor(phone_data.working_copy$TotalCharges))
+phone_data.working_copy$Churn <- as.numeric(as.factor(phone_data.working_copy$Churn))
+
+phone_data.working_copy <- na_replace(phone_data.working_copy, 0)
+
+#head(phone_data.working_copy)
+summary(phone_data.working_copy)
+```
+
+plotting the raw data to understand how the parameters 
+
+```{r}
+
+library("ggplot2")
+
+#ggpairs(phone_data, ggplot2::aes(colour = Churn))
+DataExplorer::plot_bar(phone_data, ncol = 2, by = "Churn")
+ggpairs(phone_data.working_copy %>% select(MonthlyCharges, Dependents, tenure, PaymentMethod, Churn),
+        aes(color = Churn))
+#DataExplorer::plot_boxplot(credit_data, by = "Status", ncol = 3)
+ggpairs(phone_data %>% select(MonthlyCharges, tenure, Churn),
+        aes(color = Churn))
+```
+
+Performing a sinmple PCA analysis to understand the correlation between the parameters 
+
+```{r pressure, echo=FALSE}
+phone.pca <- princomp(phone_data.working_copy)
+phone.pca.eigenvectors <- phone.pca$loadings
+phone.pca.eigenvalues <- phone.pca$sdev * phone.pca$sdev
+summary(phone.pca.eigenvalues)
+
+cor_matrix <- round(cor(phone_data.working_copy, phone.pca$scores), 3)
+
+phone.pca.var <- phone.pca$sdev^2
+phone.pca.var.per <- round(phone.pca.var/sum(phone.pca.var)*100, 1)
+barplot(phone.pca.var.per, main = "Scree plot", xlab = "principle component", ylab = "component contribution") #, ylim = c(0,55))
+plot(cumsum(phone.pca.var.per))
+
+```
+
+printing a list of the components which contribute to the different principle components 
+
+```{r}
+phone.pca$loadings
+```
+
+Runing an algorithum to identify wheather any features can be droped from the data frame to reduce the parameter space 
+
+```{r}
+data_feature_test <- Boruta(Churn~., data = phone_data.working_copy, doTrace =3)
+```
+
+returning the output of the algorithm 
+
+```{r}
+print(data_feature_test$finalDecision)
+```
+
+removing the non-important parameters from the data set and changing the last parameter as this caused an issue when trying to fit the models
+
+```{r}
+phone.data.reduced <- phone_data.working_copy %>% select(-gender, -PhoneService)# %>%
+                        #utate(Churn = one_hot(as.factor(Churn)))
+
+phone.data.reduced$months <- round(phone.data.reduced$TotalCharges / phone.data.reduced$MonthlyCharges)
+phone.data.reduced$months <- na_replace(phone.data.reduced$months, 0)
+
+phone.data.reduced <- phone.data.reduced %>% select(-TotalCharges)
+
+#table(phone.data.reduced$months)
+#ggpairs(phone.data.reduced %>% select(months, MonthlyCharges, Churn, InternetService),
+#        aes(color = Churn)) 
+
+phone_data.working_copy <- phone_data.working_copy %>% mutate(Churn = one_hot(as.factor(Churn)))
+
+phone.data.reduced <- phone_data.working_copy %>% select(-gender, -PhoneService) %>%
+                        mutate(Churn = one_hot(as.factor(Churn)))
+```
+
+Fitting a general linear model to the full and modified data sets and computing the results for the full model
+
+```{r}
+cv20 <- rsmp("cv", folds = 20)
+
+#print(phone.data.reduced$Churn)
+train_index <- createDataPartition(phone_data.working_copy$Churn, p = 0.75, list = FALSE)
+phone_data.working_copy.train <- phone_data.working_copy[train_index,]
+phone_data.working_copy.test <- phone_data.working_copy[-train_index,]
+
+phone.data.reduced.train <- phone.data.reduced[train_index,]
+phone.data.reduced.test <- phone.data.reduced[-train_index,]
+
+churn.model.all <- glm(Churn~., data = phone_data.working_copy.train, family = "binomial")#cv20)
+churn.model.reduced <- glm(Churn~., data = phone.data.reduced.train, family = "binomial")#, cv20)
+
+#churn.model.all.cv <- cv.glm(phone_data.working_copy, churn.model.all, K = 20)
+churn_pred.linear.all.train <- predict(churn.model.all, phone_data.working_copy.train, type = "response")#, cv20)
+hist(churn_pred.linear.all.train, freq = FALSE, breaks = 40, xlim = c(0,1), main = "Probability distribution using the full data with the GLM model", xlab = "Probability of a customer churning their contract")
+lines(density(churn_pred.linear.all.train, kernel = "gaussian", from = 0, to = 1), col = "red")
+y_hat.all.train <- factor(ifelse(churn_pred.linear.all.train > 0.5, 2, 1))
+#print(y_hat.all)
+
+churn.model.all.cv <- cv.glm(phone_data.working_copy.train, churn.model.all, K = 20)
+print("!")
+print(churn.model.all.cv$delta[1])
+
+churn_pred.linear.all.test <- predict(churn.model.all, phone_data.working_copy.test, type = "response")#, cv20)
+#hist(churn_pred.linear.all.test, freq = FALSE, breaks = 40, xlim = c(0,1))
+lines(density(churn_pred.linear.all.test, kernel = "gaussian", from = 0, to = 1))
+y_hat.all.test <- factor(ifelse(churn_pred.linear.all.test > 0.5, 2, 1))
+
+#autoplot(churn_pred.linear.all, type = "roc")
+churn.model.all.cv <- cv.glm(phone_data.working_copy.test, churn.model.all, K = 20)
+print("!")
+print(churn.model.all.cv$delta[1])
+
+#plot(churn.model.all.cv$seed)
+#hist(churn_pred.linear.all.cv, freq = FALSE, breaks = 40, xlim = c(0,1))
+
+#rocplot(churn.model.all)
+table(truth = na.omit(phone_data.working_copy.test)$Churn, prediction = na.omit(y_hat.all.test))
+
+print("accuracy of prediction on the training data set")
+mean(I(na.omit(y_hat.all.train == phone_data.working_copy.train$Churn)))
+print("accuracy of the prediction on the test data set")
+mean(I(na.omit(y_hat.all.test == phone_data.working_copy.test$Churn)))
+
+```
+
+processing the results from the reduced data model
+
+```{r}
+
+churn_pred.linear.reduced.test <- predict(churn.model.reduced, phone.data.reduced.test, type = "response")
+hist(churn_pred.linear.reduced.test, freq = FALSE, breaks = 40, xlim = c(0,1), main = "Probability distribution using the reduced modified data \n with the GLM model", xlab = "Probability of a customer churning their contract")
+#lines(density(churn_pred.linear.reduced, kernel = "gaussian"))
+lines(density(churn_pred.linear.reduced.test, kernel = "gaussian", from = 0, to = 1))
+y_hat.reduced.test <- factor(ifelse(churn_pred.linear.reduced.test > 0.5, 2, 1))
+
+churn_pred.linear.reduced.train <- predict(churn.model.reduced, phone.data.reduced.train, type = "response")
+#hist(churn_pred.linear.reduced.train, freq = FALSE, breaks = 40, xlim = c(0,1))
+#lines(density(churn_pred.linear.reduced, kernel = "gaussian"))
+lines(density(churn_pred.linear.reduced.train, kernel = "gaussian", from = 0, to = 1), col = "red")
+#lines(density(churn_pred.linear.all, kernel = "gaussian", from = 0, to = 1), col = "red")
+y_hat.reduced.train <- factor(ifelse(churn_pred.linear.reduced.train > 0.5, 2, 1))
+
+print("accuracy of prediction on the training data set")
+#table(phone.data.reduced.train$Churn)
+mean(I(na.omit(y_hat.reduced.train == phone.data.reduced.train$Churn)))
+print("accuracy of the prediction on the test data set")
+mean(I(na.omit(y_hat.reduced.test == phone.data.reduced.test$Churn)))
+```
+
+constructing the linear dimension analysis model to the full and reduced data sets 
+
+```{r}
+churn.ldar <- MASS::lda(Churn ~., data = phone_data.working_copy.train)
+
+churn.ldar_reduced <- MASS::lda(Churn ~., data = phone.data.reduced.train)
+```
+
+calculating and displaying the resulkts of the model
+
+```{r}
+
+
+churn_pred.ldar.test <- predict(churn.ldar, phone_data.working_copy.test, type = "response")
+#summary(churn_pred.ldar.test$posterior[,2])
+hist(churn_pred.ldar.test$posterior[,2], freq = FALSE, breaks = 40, xlim = c(0,1), main = "Probability distribution using the full data \n with the LDA model", xlab = "Probability of a customer churning their contract")
+lines(density(churn_pred.ldar.test$posterior[,2], freq = FALSE, breaks = 40, xlim = c(0,1), from = 0, to = 1))
+y_hat_lnc <- factor(ifelse(churn_pred.ldar.test$posterior[,2] > 0.5, 1, 0))
+
+churn_pred.ldar.train <- predict(churn.ldar, phone_data.working_copy.train, type = "response")
+summary(churn_pred.ldar.train$posterior[,2])
+#hist(churn_pred.ldar$posterior[,2], freq = FALSE, breaks = 40, xlim = c(0,1))
+lines(density(churn_pred.ldar.train$posterior[,2], freq = FALSE, breaks = 40, xlim = c(0,1), from = 0, to = 1), col = "red")
+y_hat_lnc.train <- as.factor(ifelse(churn_pred.ldar.train$posterior[,2] > 0.5, 1, 0))
+#rocplot(churn_pred.ldar)
+
+churn_pred.ldar_reduced.test <- predict(churn.ldar_reduced, phone.data.reduced.test, type = "response")
+#summary(churn_pred.ldar_reduced.test$posterior[,2])
+hist(churn_pred.ldar_reduced.test$posterior[,2], freq = FALSE, breaks = 40, xlim = c(0,1), main = "Probability distribution using the reduced modified data \n with the LDA model", xlab = "Probability of a customer churning their contract")
+
+lines(density(churn_pred.ldar_reduced.test$posterior[,2], freq = FALSE, breaks = 40, xlim = c(0,1), from = 0, to = 1))
+y_hat_lnc.test <- factor(ifelse(churn_pred.ldar_reduced.test$posterior[,2] > 0.5, 1, 0))
+
+churn_pred.ldar_reduced.train <- predict(churn.ldar_reduced, phone.data.reduced.train, type = "response")
+summary(churn_pred.ldar_reduced.train$posterior[,2])
+#hist(churn_pred.ldar_reduced.train$posterior[,2], freq = FALSE, breaks = 40, xlim = c(0,1))
+
+lines(density(churn_pred.ldar_reduced.train$posterior[,2], freq = FALSE, breaks = 40, xlim = c(0,1), from = 0, to = 1), col =  "red")
+y_hat_lnc <- factor(ifelse(churn_pred.ldar_reduced.train$posterior[,2] > 0.5, 1, 0))
+#rocplot(churn.ldar_reduced)
+
+#mean(I(na.omit(y_hat_lnc.train == phone_data.working_copy.train$Churn)))
+#mean(I(na.omit(y_hat_lnc.test == phone_data.working_copy.test$Churn)))
+```
+
+creating the features required for to work with multiple learners 
+
+```{r}
+phone_data.working_copy.mod <- phone_data.working_copy
+phone_data.working_copy.mod$Churn <- as.factor(phone_data.working_copy.mod$Churn)
+table(phone_data.working_copy.mod$Churn)
+levels(phone_data.working_copy.mod$Churn) <- c('no', 'yes') 
+
+phone.data.reduced.mod <- phone.data.reduced
+#table(phone.data.reduced.mod$Churn)
+#phone.data.reduced.mod <- na_replace(phone.data.reduced.mod, 0)
+phone.data.reduced.mod$Churn <- as.factor(phone.data.reduced.mod$Churn)
+table(phone.data.reduced.mod$Churn)
+levels(phone.data.reduced.mod$Churn) <- c('no', 'yes')
+ 
+#table(phone.data.reduced.mod$Churn)
+
+churns <- TaskClassif$new(id = "churn model",
+                                 backend = phone_data.working_copy.mod,
+                                 target = "Churn",
+                                 positive = "yes")
+
+churns_red <- TaskClassif$new(id = "reduced churn model",
+                                 backend = phone.data.reduced.mod,
+                                 target = "Churn",
+                                 positive = "yes")
+
+cv20 <- rsmp("cv", folds = 20)
+cv20$instantiate(churns)
+
+lrn_baseline <- lrn("classif.featureless", predict_type = "prob")
+lrn_cart <- lrn("classif.rpart", predict_type = "prob", xval = 10)
+lrn_ranger <- lrn("classif.ranger", predict_type = "prob")
+lrn_boost <- lrn("classif.xgboost", predict_type = "prob")
+lrn_log_reg  <- lrn("classif.log_reg", predict_type = "prob")
+lrn_glmnet <- lrn("classif.glmnet", predict_type = "prob")
+
+
+#rsp_baseline <- resample(churns, lrn_baseline, cv20, store_models = TRUE)
+#rsp_cart <- resample(churns, lrn_cart, cv20, store_models = TRUE)
+#rsp_ranger <- resample(churns, lrn_ranger, cv20, store_models = TRUE)
+#rsp_boost <- resample(churns, lrn_boost, cv20, store_models = TRUE)
+#lrn_cart_cv <- lrn("classif.rpart", predict_type = "prob", xval = 10)
+
+res_cart_cv_full <- resample(churns, lrn_cart, cv20, store_models = TRUE)
+#rpart::plotcp(res_cart_cv_full$learners[[1]]$model)
+print(res_cart_cv_full$errors)
+
+
+res_cart_cv_reduced <- resample(churns_red, lrn_cart, cv20, store_models = TRUE)
+#rpart::plotcp(res_cart_cv_reduced$learners[[2]]$model)
+```
+
+bench marking the learners on the full data set with no refinement of the models 
+
+```{r}
+churn_res <- benchmark(data.table(task = list(churns),
+                            learner = list(lrn_baseline, lrn_cart, lrn_ranger, lrn_boost, lrn_log_reg, lrn_glmnet),
+                            resampling = list(cv20)),
+                 store_models = TRUE)
+
+churn_res$aggregate(list(msr("classif.ce"),
+                   msr("classif.acc"),
+                   msr("classif.auc"),
+                   msr("classif.fpr"),
+                   msr("classif.fnr"),
+                   msr("classif.tpr"),
+                   msr("classif.tnr")))
+
+lrn_cart.cv <- lrn("classif.rpart", predict_type = "prob", xval = 10)
+res_cart.cv <- resample(churns, lrn_cart.cv, cv20, store_models = TRUE)
+
+autoplot(churn_res)
+autoplot(churn_res$clone(deep = TRUE), type = "roc")
+
+churn_res$resample_result
+```
+
+```{r}
+#res_base.cv <- resample(churns, lrn_baseline, cv20, store_models = TRUE)
+res_cart.cv <- resample(churns, lrn_cart.cv, cv20, store_models = TRUE)
+res_glmnet.cv <- resample(churns, lrn_glmnet, cv20, store_models = TRUE)
+
+rpart::plotcp(res_cart.cv$learners[[1]]$model)
+rpart::plotcp(res_cart.cv$learners[[2]]$model)
+rpart::plotcp(res_cart.cv$learners[[3]]$model)
+rpart::plotcp(res_cart.cv$learners[[4]]$model)
+rpart::plotcp(res_cart.cv$learners[[5]]$model)
+rpart::plotcp(res_cart.cv$learners[[6]]$model)
+rpart::plotcp(res_cart.cv$learners[[7]]$model)
+rpart::plotcp(res_cart.cv$learners[[8]]$model)
+rpart::plotcp(res_cart.cv$learners[[10]]$model)
+
+#rpart::plotcp(res_glmnet.cv$learners[[1]]$model)
+#rpart::plotcp(res_glmnet.cv$learners[[2]]$model)
+#rpart::plotcp(res_glmnet.cv$learners[[3]]$model)
+#rpart::plotcp(res_glmnet.cv$learners[[4]]$model)
+#rpart::plotcp(res_glmnet.cv$learners[[5]]$model)
+#rpart::plotcp(res_glmnet.cv$learners[[6]]$model)
+#rpart::plotcp(res_glmnet.cv$learners[[7]]$model)
+#rpart::plotcp(res_glmnet.cv$learners[[8]]$model)
+#rpart::plotcp(res_glmnet.cv$learners[[10]]$model)
+
+
+
+lrn_cart_cp_full <- lrn("classif.rpart", predict_type = "prob", cp = 0.035)
+```
+
+bench marking the learners on the full data set with  refinement of the cart learner 
+
+```{r}
+churn_res.v2 <- benchmark(data.table(task = list(churns),
+                            learner = list(lrn_baseline, lrn_cart_cp_full, lrn_ranger, lrn_boost, lrn_log_reg, lrn_glmnet),
+                            resampling = list(cv20)),
+                 store_models = TRUE)
+
+churn_res.v2$aggregate(list(msr("classif.ce"),
+                   msr("classif.acc"),
+                   msr("classif.auc"),
+                   msr("classif.fpr"),
+                   msr("classif.fnr")))
+
+autoplot(churn_res.v2)
+autoplot(churn_res.v2$clone(deep = TRUE), type = "roc")
+
+```
+
+This is the result for the complete data set
+
+```{r}
+churn_res.red <- benchmark(data.table(task = list(churns_red),
+                            learner = list(lrn_baseline, lrn_cart, lrn_ranger, lrn_boost, lrn_log_reg, lrn_glmnet),
+                            resampling = list(cv20)),
+                 store_models = TRUE)
+
+churn_res.red$aggregate(list(msr("classif.ce"),
+                   msr("classif.acc"),
+                   msr("classif.auc"),
+                   msr("classif.fpr"),
+                   msr("classif.fnr"),
+                   msr("classif.tpr"),
+                   msr("classif.tnr")))
+
+autoplot(churn_res.red)
+autoplot(churn_res.red$clone(deep = TRUE), type = "roc")
+```
+
+```{r}
+res_base_red.cv <- resample(churns_red, lrn_baseline, cv20, store_models = TRUE)
+res_cart_red.cv <- resample(churns_red, lrn_cart.cv, cv20, store_models = TRUE)
+
+#p#rint(res_base.cv)
+#print(res_cart.cv)
+#rpart::plotcp(res_base.cv$learners[[5]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[1]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[2]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[3]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[4]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[5]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[6]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[7]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[8]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[9]]$model)
+rpart::plotcp(res_cart_red.cv$learners[[10]]$model)
+
+
+```
+
+```{r}
+trees <- churn_res$resample_result(6)
+tree_1 <- trees$learners[[2]]
+tree_1_rpart <- tree_1$model
+tree_2 <- trees$learners[[5]]
+tree_2_rpart <- tree_2$model
+
+#summary(tree_1)
+plot(tree_1_rpart, compress = TRUE, margin = 0.1)
+#text(tree_1_rpart, use.n = TRUE, cex = 0.8)
+
+plot(tree_2_rpart, compress = TRUE, margin = 0.1)
+#text(tree_2_rpart, use.n = TRUE, cex = 0.8)
+```
+
+This is the final results for the reduced data set with the tunned parameters 
+
+```{r}
+lrn_cart_cp_reduced <- lrn("classif.rpart", predict_type = "prob", cp = 0.032)
+lrn_glmnet <- lrn("classif.glmnet", predict_type = "prob", alpha = 1)
+
+churn_res.v2 <- benchmark(data.table(task = list(churns_red),
+                            learner = list(lrn_baseline, lrn_cart_cp_reduced, lrn_ranger, lrn_boost, lrn_log_reg, lrn_glmnet),
+                            resampling = list(cv20)),
+                 store_models = TRUE)
+
+churn_res.v2$aggregate(list(msr("classif.ce"),
+                   msr("classif.acc"),
+                   msr("classif.auc"),
+                   msr("classif.fpr"),
+                   msr("classif.fnr"),
+                   msr("classif.tpr"),
+                   msr("classif.tnr")))
+
+autoplot(churn_res.v2)
+autoplot(churn_res.v2$clone(deep = TRUE), type = "roc")
+
+```
+
+
+```{r}
+
+final_model <- benchmark(data.table(task = list(churns),
+                            learner = list(lrn_glmnet),
+                            resampling = list(cv20)),
+                 store_models = TRUE)
+
+final_model$aggregate(list(msr("classif.ce"),
+                   msr("classif.acc"),
+                   msr("classif.auc"),
+                   msr("classif.fpr"),
+                   msr("classif.fnr"),
+                   msr("classif.tpr"),
+                   msr("classif.tnr")))
+
+autoplot(final_model$clone(deep = TRUE), type = "roc")
+```
+
+```{r}
+#final <- predict(final_model, phone_data.working_copy)
+#summary(final)
+
+```
+
+```{r}
+plot(phone.data.reduced.mod$StreamingMovies, phone.data.reduced.mod$TotalCharges, col = phone.data.reduced.mod$Churn)
+plot(phone.data.reduced.mod$MonthlyCharges, phone.data.reduced.mod$TotalCharges, col = phone.data.reduced.mod$Churn)
+#ggplot(phone.data.reduced.mod + geom_point(aes(x = tenure, y = TotalCharges))
+                                                                                
+                                                                                #, color = Churn)) # + geom_point(size = 2, shape = 1)) 
+```
+
